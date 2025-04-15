@@ -1,1 +1,8 @@
 fastapi-env/
+__pycache__/
+*.pytest_cache
+*.py[cod]
+*.pyo
+*.pyd
+*.db
+*.env
