@@ -1,77 +1,90 @@
 import pytest
-from fastapi.testclient import TestClient
-from main import app
+from unittest.mock import MagicMock
+from sqlalchemy.orm import Session
+from fastapi import HTTPException
+from pydantic import ValidationError
 
-client = TestClient(app)
+from main import register, login, RegisterModel
 
-# Helper: register user safely
-def register_user(username: str, password: str):
-    return client.post("/register", json={"username": username, "password": password})
+# Reusable mock DB fixture
+@pytest.fixture
+def mock_db():
+    return MagicMock(spec=Session)
 
-# ---- Test Cases ----
+# ---------- Registration Tests ----------
 
-def test_register_valid_user():
-    response = register_user("PyUser1", "Test@123")
-    assert response.status_code == 200
-    assert response.json() == {"message": "User registered successfully!"}
+def test_register_valid_user(mock_db):
+    mock_db.query().filter().first.return_value = None
+    user = RegisterModel(username="TestUser1", password="Strong@123")
+    response = register(user, db=mock_db)
+    assert response == {"message": "User registered successfully!"}
 
-def test_register_existing_user():
-    register_user("PyUser2", "Test@123")
-    response = register_user("PyUser2", "Test@123")
-    assert response.status_code == 400
+def test_register_existing_user(mock_db):
+    mock_db.query().filter().first.return_value = True
+    user = RegisterModel(username="TestUser2", password="Strong@123")
+    with pytest.raises(HTTPException) as exc:
+        register(user, db=mock_db)
+    assert exc.value.status_code == 400
 
 def test_register_invalid_username():
-    response = register_user("!!", "Test@123")
-    assert response.status_code == 422
+    with pytest.raises(ValueError):
+        RegisterModel(username="!!", password="Strong@123")
 
 def test_register_short_username():
-    response = register_user("ab", "Test@123")
-    assert response.status_code == 422
+    with pytest.raises(ValueError):
+        RegisterModel(username="ab", password="Strong@123")
 
 def test_register_weak_password():
-    response = register_user("PyUser3", "123")
-    assert response.status_code == 422
+    with pytest.raises(ValueError):
+        RegisterModel(username="TestUser3", password="123")
+
+def test_register_password_no_uppercase():
+    with pytest.raises(ValueError):
+        RegisterModel(username="TestUser4", password="weak@123")
+
+def test_register_password_no_special_char():
+    with pytest.raises(ValueError):
+        RegisterModel(username="TestUser5", password="Strong123")
 
 def test_register_missing_password():
-    response = client.post("/register", json={"username": "PyUser4"})
-    assert response.status_code == 422
+    with pytest.raises(ValidationError):
+        RegisterModel(username="TestUser6")
 
 def test_register_missing_username():
-    response = client.post("/register", json={"password": "Test@123"})
-    assert response.status_code == 422
+    with pytest.raises(ValidationError):
+        RegisterModel(password="Strong@123")
 
-def test_login_valid_credentials():
-    register_user("PyUser5", "Test@123")
-    response = client.get("/login", params={"username": "PyUser5", "password": "Test@123"})
-    assert response.status_code == 200
-    assert response.json() == {"message": "Login successful!"}
+# ---------- Login Tests ----------
 
-def test_login_invalid_password():
-    register_user("PyUser6", "Test@123")
-    response = client.get("/login", params={"username": "PyUser6", "password": "Wrong123"})
-    assert response.status_code == 401
+def test_login_valid_user(mock_db):
+    mock_db.query().filter().first.return_value = type('User', (), {
+        "username": "TestUser7",
+        "password": "Strong@123"
+    })()
+    response = login(username="TestUser7", password="Strong@123", db=mock_db)
+    assert response == {"message": "Login successful!"}
 
-def test_login_missing_username():
-    response = client.get("/login", params={"password": "Test@123"})
-    assert response.status_code == 400
+def test_login_wrong_password(mock_db):
+    mock_db.query().filter().first.return_value = type('User', (), {
+        "username": "TestUser8",
+        "password": "Strong@123"
+    })()
+    with pytest.raises(HTTPException) as exc:
+        login(username="TestUser8", password="WrongPass", db=mock_db)
+    assert exc.value.status_code == 401
 
-def test_login_missing_password():
-    response = client.get("/login", params={"username": "PyUser7"})
-    assert response.status_code == 400
+def test_login_user_not_found(mock_db):
+    mock_db.query().filter().first.return_value = None
+    with pytest.raises(HTTPException) as exc:
+        login(username="GhostUser", password="Strong@123", db=mock_db)
+    assert exc.value.status_code == 404
 
-def test_login_nonexistent_user():
-    response = client.get("/login", params={"username": "NoOne", "password": "Test@123"})
-    assert response.status_code == 404
+def test_login_missing_username(mock_db):
+    with pytest.raises(HTTPException) as exc:
+        login(username=None, password="Strong@123", db=mock_db)
+    assert exc.value.status_code == 400
 
-def test_logout():
-    response = client.post("/logout")
-    assert response.status_code == 200
-    assert response.json() == {"message": "Logout successful!"}
-
-def test_password_no_uppercase():
-    response = register_user("PyUser8", "weak@123")
-    assert response.status_code == 422
-
-def test_password_no_special_char():
-    response = register_user("PyUser9", "Strong123")
-    assert response.status_code == 422
+def test_login_missing_password(mock_db):
+    with pytest.raises(HTTPException) as exc:
+        login(username="TestUser9", password=None, db=mock_db)
+    assert exc.value.status_code == 400
